@@ -3,8 +3,10 @@
 package godirwalk
 
 import (
+	"errors"
 	"os"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -129,8 +131,7 @@ func (s *Scanner) Scan() bool {
 		// When the work buffer has nothing remaining to decode, we need to load
 		// more data from disk.
 		if len(s.workBuffer) == 0 {
-			n, err := syscall.ReadDirent(s.fd, s.scratchBuffer)
-			// n, err := unix.ReadDirent(s.fd, s.scratchBuffer)
+			n, err := s.readDirentWithTimeout()
 			if err != nil {
 				if err == syscall.EINTR /* || err == unix.EINTR */ {
 					continue
@@ -163,4 +164,23 @@ func (s *Scanner) Scan() bool {
 		s.childName = string(nameSlice)
 		return true
 	}
+}
+
+
+// readDirentWithTimeout is a wrapper around syscall.ReadDirent() and times out when the call takes too long.
+// A sample use case is disconnected NFS mounts, which hang when enumereated.
+func (s *Scanner) readDirentWithTimeout() (n int, err error) {
+	done := make(chan struct{}, 1)
+	go func() {
+		n, err = syscall.ReadDirent(s.fd, s.scratchBuffer)
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		err = errors.New("timeout")
+	}
+	
+	return
 }
